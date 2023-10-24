@@ -1,0 +1,65 @@
+#!/usr/bin/env ruby
+
+file = [<<~GO
+    package config
+
+    import (
+    	"github.com/stretchr/testify/require"
+    	"github.com/urfave/cli/v2"
+    	"testing"
+    )
+
+    type OptionFn func() []string
+
+    func makeOptions(t *testing.T, opts ...OptionFn) AllOptions {
+	    args := []string{""}
+	    for _, fn := range opts {
+		    args = append(args, fn()...)
+	    }
+	    var ctx *cli.Context
+	    flags, err := MakeCLIFlags()
+	    require.NoError(t, err)
+	    app := cli.App{
+		    Flags: flags,
+		    Action: func(context *cli.Context) error {
+			    ctx = context
+			    return nil
+		    },
+	    }
+	    err = app.Run(args)
+	    require.NoError(t, err)
+	    appOpts, err := OptionsFrom(ctx)
+	    require.NoError(t, err)
+	    return appOpts
+    }
+GO
+]
+
+def extract_name_and_arg(from)
+    return nil if from.strip.empty?
+    name = from.strip.split(" ").first
+    arg = /name:"([^"]+)"/.match(from)[1]
+    type = /\s*[^\s]+\s+([^\s]+).*/.match(from)[1]
+    [name, arg, type]
+end
+
+file.append *(File.read("config/context.go").split("\n")
+    .then { |s| s[s.index { _1 =~ /type AllOptions struct/ } + 1...] }
+    .then { |s| s[0...s.index { _1 =~ /}/ }] }
+    .map { extract_name_and_arg(_1) }
+    .compact
+    .map do |name, arg, type|
+        func = if type.include?("bool")
+            ["func With#{name}() OptionFn { return func() []string { return []string{\"--#{arg}\"} } }"]
+        else
+            [
+                "func With#{name}(v string) OptionFn { return func() []string { return []string{\"--#{arg}\", v} }}",
+                "func WithAny#{name}() OptionFn { return With#{name}(\"foo\")}"
+            ]
+        end
+
+        func.join("\n")
+    end)
+
+File.write("config/options_helper_test.go", file.join("\n"))
+system("go fmt config/options_helper_test.go")
