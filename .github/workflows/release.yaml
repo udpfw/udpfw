@@ -1,0 +1,37 @@
+on:
+  push:
+    tags:
+      - '**'
+
+jobs:
+  release-dispatch:
+    runs-on: ubuntu-latest
+
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ghcr.io/udpfw/dispatch
+
+    permissions:
+      contents: read
+      packages: write
+
+    defaults:
+      run:
+        working-directory: dispatch
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Container Image
+        run: docker build -t ${{ env.IMAGE_NAME }}:${{ github.ref_name }} .
+
+      - name: Push Container Image
+        run: docker push ${{ env.IMAGE_NAME }}:${{ github.ref_name }}
