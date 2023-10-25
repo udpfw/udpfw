@@ -61,5 +61,5 @@ file.append *(File.read("config/context.go").split("\n")
         func.join("\n")
     end)
 
-File.write("config/options_helper_test.go", file.join("\n"))
+File.Write("config/options_helper_test.go", file.join("\n"))
 system("go fmt config/options_helper_test.go")

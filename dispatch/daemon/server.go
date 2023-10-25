@@ -69,6 +69,10 @@ func (s *Daemon) Run() error {
 		return err
 	}
 	s.ps = ps
+	if err = ps.Start(); err != nil {
+		log.Error("Failed starting pubsub", zap.Error(err))
+		return err
+	}
 
 	log.Info("Initialize TCP Server...")
 	srv, err := tcp.New(s.ctx, ps)

@@ -1,22 +1,23 @@
-package tcp
+package common
 
 import "encoding/binary"
 
-var helloMessage = []byte("!UDPFW\x00")
-var helloSize = len(helloMessage)
+var HelloMessage = []byte("!UDPFW\x00")
+var HelloSize = len(HelloMessage)
 
 type ClientMessageType byte
 
 const (
-	ClientMessageInvalid ClientMessageType = 0
-	ClientMessagePkt     ClientMessageType = 1
-	ClientMessageBye     ClientMessageType = 2
+	ClientMessageInvalid ClientMessageType = iota
+	ClientMessageAck
+	ClientMessagePing
+	ClientMessagePkt
+	ClientMessageBye
 )
 
 type ClientMessage []byte
 
 const MinClientMessageLen = 3 // type (1) + size (2)
-const ClientPayloadPrealloc = 16
 
 func (c ClientMessage) Type() ClientMessageType {
 	if len(c) < MinClientMessageLen {
@@ -24,6 +25,10 @@ func (c ClientMessage) Type() ClientMessageType {
 	}
 
 	switch c[0] {
+	case byte(ClientMessageAck):
+		return ClientMessageAck
+	case byte(ClientMessagePing):
+		return ClientMessagePing
 	case byte(ClientMessagePkt):
 		return ClientMessagePkt
 	case byte(ClientMessageBye):
@@ -57,7 +62,7 @@ func (c ClientMessage) Deconstruct() (ClientMessageType, []byte) {
 }
 
 func NewClientMessage(kind ClientMessageType, payload []byte) ClientMessage {
-	buf := make([]byte, MinClientMessageLen, MinClientMessageLen+len(payload))
+	buf := make([]byte, MinClientMessageLen+len(payload))
 	buf[0] = byte(kind)
 	binary.BigEndian.PutUint16(buf[1:], uint16(len(payload)))
 	if len(payload) > 0 {
@@ -66,8 +71,8 @@ func NewClientMessage(kind ClientMessageType, payload []byte) ClientMessage {
 	return buf
 }
 
-func newMessageAssembler() *messageAssembler {
-	return &messageAssembler{
+func NewMessageAssembler() *MessageAssembler {
+	return &MessageAssembler{
 		buf: make([]byte, 0, 128),
 	}
 }
@@ -80,24 +85,25 @@ const (
 	statePayload
 )
 
-type messageAssembler struct {
+type MessageAssembler struct {
 	buf   ClientMessage
 	size  uint16
 	state AssemblerState
 }
 
-func (m *messageAssembler) assemble() ClientMessage {
+func (m *MessageAssembler) assemble() ClientMessage {
 	bLen := len(m.buf)
 	buf := make([]byte, bLen)
 	copy(buf, m.buf[:bLen])
 
 	m.size = 0
 	m.state = stateType
+	m.buf = m.buf[:0]
 
 	return buf
 }
 
-func (m *messageAssembler) feed(b byte) ClientMessage {
+func (m *MessageAssembler) Feed(b byte) ClientMessage {
 	m.buf = append(m.buf, b)
 	bufLen := uint16(len(m.buf))
 	switch m.state {

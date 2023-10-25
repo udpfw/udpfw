@@ -3,6 +3,7 @@ package tcp
 import (
 	"bytes"
 	"errors"
+	"github.com/udpfw/common"
 	"go.uber.org/zap"
 	"io"
 	"net"
@@ -16,11 +17,12 @@ type Client struct {
 	log        *zap.Logger
 	done       func()
 	stopped    atomic.Bool
-	writeQueue chan ClientMessage
+	writeQueue chan common.ClientMessage
 
 	readySignal chan bool
-	assembler   *messageAssembler
-	broadcast   func(msg ClientMessage)
+	assembler   *common.MessageAssembler
+	broadcast   func(msg common.ClientMessage)
+	hostname    string
 }
 
 func (c *Client) service() {
@@ -76,13 +78,14 @@ func (c *Client) serviceWrites(done func()) {
 			}
 			written += n
 		}
+		c.log.Debug("Wrote payload to client", zap.Int("size", toWrite))
 	}
 }
 
 func (c *Client) serviceReads(done func()) {
 	defer done()
 	wantsHello := true
-	buffer := make([]byte, 0, 64)
+	buffer := make([]byte, 128)
 	bufferCur := 0
 	for {
 		n, err := c.conn.Read(buffer[bufferCur:])
@@ -91,69 +94,76 @@ func (c *Client) serviceReads(done func()) {
 				if !c.stopped.Load() {
 					c.log.Debug("Client disconnected without BYE packet")
 					c.drop()
-					return
 				}
-				return // Exiting cleanly.
 			} else {
 				c.log.Error("Error reading", zap.Error(err))
 				c.drop()
-				return
 			}
+			return
 		}
 		bufferCur += n
-		if wantsHello && bufferCur >= helloSize {
-			helloData := buffer[:helloSize]
-			if !bytes.Equal(helloData, helloMessage) {
+		if wantsHello && bufferCur >= common.HelloSize {
+			helloData := buffer[:common.HelloSize]
+			if !bytes.Equal(helloData, common.HelloMessage) {
 				c.log.Warn("Dropping client offering invalid handshake")
 				c.drop()
 				return
 			}
 			// Hello is good. Rearrange the buffer, and continue as it would.
-			if bufferCur-helloSize > 0 {
+			if bufferCur-common.HelloSize > 0 {
 				for i := 0; i < bufferCur; i++ {
-					buffer[i] = buffer[helloSize+i]
+					buffer[i] = buffer[common.HelloSize+i]
 				}
-				n -= helloSize
 			}
+			n -= common.HelloSize
+			bufferCur = 0
+			c.log.Info("Received valid handshake")
 			wantsHello = false
+			c.Write(common.NewClientMessage(common.ClientMessageAck, []byte(c.hostname)))
 			c.ready()
+			if n == 0 {
+				continue
+			}
 		}
 
-		for i := 0; i < bufferCur; i++ {
-			msg := c.assembler.feed(buffer[i])
+		for i := 0; i < n; i++ {
+			msg := c.assembler.Feed(buffer[i])
 			if msg != nil {
+				c.log.Debug("Got message from client")
 				c.handleMessage(msg)
-				buffer = buffer[:0]
-				bufferCur = 0
 			}
 		}
+		bufferCur = 0
 	}
 }
 
-func (c *Client) handleMessage(msg ClientMessage) {
+func (c *Client) handleMessage(msg common.ClientMessage) {
 	switch msg.Type() {
-	case ClientMessagePkt:
+	case common.ClientMessagePkt:
+		c.log.Debug("Processing PKT message")
 		c.broadcast(msg)
-	case ClientMessageBye:
+	case common.ClientMessageBye:
+		c.log.Debug("Processing BYE message")
 		c.drop()
-	case ClientMessageInvalid:
+	case common.ClientMessageInvalid:
 		c.log.Warn("Ignoring message with invalid type", zap.ByteString("payload", msg))
 	}
 }
 
-func (c *Client) Write(msg ClientMessage) {
+func (c *Client) Write(msg common.ClientMessage) {
 	c.writeQueue <- msg
 }
 
-func NewClient(id string, conn net.Conn, done func(), broadcast func(msg ClientMessage)) *Client {
+func NewClient(hostname, id string, conn net.Conn, done func(), broadcast func(msg common.ClientMessage)) *Client {
 	return &Client{
 		id:          id,
+		hostname:    hostname,
 		conn:        conn,
 		log:         zap.L().With(zap.String("facility", "TCP"), zap.String("client", id)),
 		done:        done,
-		writeQueue:  make(chan ClientMessage, 64),
+		writeQueue:  make(chan common.ClientMessage, 64),
 		readySignal: make(chan bool),
-		assembler:   newMessageAssembler(),
+		assembler:   common.NewMessageAssembler(),
 		broadcast:   broadcast,
 	}
 }

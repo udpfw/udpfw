@@ -22,7 +22,7 @@ type AllOptions struct {
 	NatsClientCertificate   *FilePath `name:"nats-client-certificate" usage:"NATS client certificate path" env:"NATS_CLIENT_CERTIFICATE_PATH" category:"NATS TLS" `
 	NatsClientKey           *FilePath `name:"nats-client-key" usage:"NATS client certificate key path" env:"NATS_CLIENT_CERTIFICATE_KEY_PATH" category:"NATS TLS" `
 
-	RedisURL           *string `name:"redis-url" usage:"Redis URL (when using Redis for pubsub)" env:"REDIS_PATH" category:"Redis" `
+	RedisURL           *string `name:"redis-url" usage:"Redis URL (when using Redis for pubsub)" env:"REDIS_URL" category:"Redis" `
 	RedisPubsubChannel *string `name:"redis-pubsub-channel" usage:"Redis channel name where data will be exchanged" env:"REDIS_PUBSUB_CHANNEL" category:"Redis" value:"udpfw-dispatch-exchange"`
 }
 

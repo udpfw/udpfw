@@ -4,20 +4,16 @@ on:
       - '**'
 
 jobs:
-  release-dispatch:
+  release:
     runs-on: ubuntu-latest
 
     env:
       REGISTRY: ghcr.io
-      IMAGE_NAME: ghcr.io/udpfw/dispatch
+      IMAGE_NAME: ghcr.io/udpfw/udpfw
 
     permissions:
       contents: read
       packages: write
-
-    defaults:
-      run:
-        working-directory: dispatch
 
     steps:
       - name: Checkout repository
