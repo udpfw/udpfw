@@ -185,7 +185,7 @@ func (d *Dispatch) serviceReads() {
 		if pkt == nil {
 			continue
 		}
-		fmt.Printf("%#v\n", pkt)
+		d.OnPacket <- pkt.Payload()
 	}
 }
 
