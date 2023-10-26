@@ -75,7 +75,7 @@ func main() {
 				defer close(injectorDone)
 				for pkt := range dispatch.OnPacket {
 					if err := handler.Inject(pkt); err != nil {
-						// TODO: Log
+						logger.Error("Failed injecting packet", zap.Error(err))
 					}
 				}
 			}()
