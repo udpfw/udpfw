@@ -21,6 +21,8 @@ LABEL org.opencontainers.image.source=https://github.com/udpfw/udpfw
 LABEL org.opencontainers.image.description="UDPfw Binaries"
 LABEL org.opencontainers.image.licenses=MIT
 
+RUN apt update && apt install -yyy --no-install-recommends libpcap0.8 libpcap-dev
+
 RUN mkdir /opt/udpfw
 COPY --from=build /nodelet /opt/udpfw/nodelet
 COPY --from=build /dispatch /opt/udpfw/dispatch
