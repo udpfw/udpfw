@@ -4,7 +4,6 @@ import (
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"github.com/gopacket/gopacket/pcap"
-	"go.uber.org/zap"
 )
 
 type PacketReader struct {
