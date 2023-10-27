@@ -1,7 +1,6 @@
 package tcp
 
 import (
-	"bytes"
 	"errors"
 	"github.com/udpfw/common"
 	"go.uber.org/zap"
@@ -12,22 +11,21 @@ import (
 )
 
 type Client struct {
-	id         string
-	conn       net.Conn
-	log        *zap.Logger
-	done       func()
-	stopped    atomic.Bool
-	writeQueue chan common.ClientMessage
-
+	id          string
+	conn        net.Conn
+	log         *zap.Logger
+	stopped     atomic.Bool
+	writeQueue  chan common.ClientMessage
 	readySignal chan bool
 	assembler   *common.MessageAssembler
-	broadcast   func(msg common.ClientMessage)
-	hostname    string
+	wantsHello  bool
+	ns          *string
+	server      *Server
 }
 
 func (c *Client) service() {
 	go func() {
-		defer c.done()
+		defer c.server.SignalDone(c)
 		wg := sync.WaitGroup{}
 		wg.Add(2)
 		go c.serviceWrites(wg.Done)
@@ -84,7 +82,6 @@ func (c *Client) serviceWrites(done func()) {
 
 func (c *Client) serviceReads(done func()) {
 	defer done()
-	wantsHello := true
 	buffer := make([]byte, 128)
 	bufferCur := 0
 	for {
@@ -101,50 +98,61 @@ func (c *Client) serviceReads(done func()) {
 			}
 			return
 		}
-		bufferCur += n
-		if wantsHello && bufferCur >= common.HelloSize {
-			helloData := buffer[:common.HelloSize]
-			if !bytes.Equal(helloData, common.HelloMessage) {
-				c.log.Warn("Dropping client offering invalid handshake")
-				c.drop()
-				return
-			}
-			// Hello is good. Rearrange the buffer, and continue as it would.
-			if bufferCur-common.HelloSize > 0 {
-				for i := 0; i < bufferCur; i++ {
-					buffer[i] = buffer[common.HelloSize+i]
-				}
-			}
-			n -= common.HelloSize
-			bufferCur = 0
-			c.log.Info("Received valid handshake")
-			wantsHello = false
-			c.Write(common.NewClientMessage(common.ClientMessageAck, []byte(c.hostname)))
-			c.ready()
-			if n == 0 {
-				continue
-			}
-		}
 
 		for i := 0; i < n; i++ {
 			msg := c.assembler.Feed(buffer[i])
 			if msg != nil {
 				c.log.Debug("Got message from client")
 				c.handleMessage(msg)
+				break
 			}
+
+			if c.wantsHello && c.assembler.BufferSize() > 2 && c.assembler.ExpectedType() != common.ClientMessageHello {
+				c.log.Info("Dropping client emitting invalid first message")
+				c.drop()
+				return
+			}
+
 		}
 		bufferCur = 0
 	}
 }
 
 func (c *Client) handleMessage(msg common.ClientMessage) {
+	if c.wantsHello && msg.Type() != common.ClientMessageHello {
+		c.log.Info("Dropping client attempting exchange without handshake")
+		c.drop()
+		return
+	}
+
 	switch msg.Type() {
+	case common.ClientMessageHello:
+		c.log.Debug("Received valid handshake")
+		var ns string
+		if msg.PayloadSize() > 0 {
+			ns = string(msg.Payload())
+			c.log.Debug("Registered interest in namespace", zap.Stringp("namespace", c.ns))
+		} else {
+			ns = "$$global"
+			c.log.Debug("Client is running on global namespace")
+		}
+		c.ns = &ns
+		c.wantsHello = false
+		c.Write(common.NewClientMessage(common.ClientMessageAck, []byte(c.server.hostname)))
+		c.ready()
+
+	case common.ClientMessagePing:
+		c.log.Debug("Processing PING message")
+		c.Write(common.NewClientMessage(common.ClientMessagePong, nil))
+
 	case common.ClientMessagePkt:
 		c.log.Debug("Processing PKT message")
-		c.broadcast(msg)
+		c.server.RequestBroadcast(c, msg)
+
 	case common.ClientMessageBye:
 		c.log.Debug("Processing BYE message")
 		c.drop()
+
 	case common.ClientMessageInvalid:
 		c.log.Warn("Ignoring message with invalid type", zap.ByteString("payload", msg))
 	}
@@ -154,16 +162,14 @@ func (c *Client) Write(msg common.ClientMessage) {
 	c.writeQueue <- msg
 }
 
-func NewClient(hostname, id string, conn net.Conn, done func(), broadcast func(msg common.ClientMessage)) *Client {
+func NewClient(s *Server, id string, conn net.Conn) *Client {
 	return &Client{
 		id:          id,
-		hostname:    hostname,
 		conn:        conn,
 		log:         zap.L().With(zap.String("facility", "TCP"), zap.String("client", id)),
-		done:        done,
 		writeQueue:  make(chan common.ClientMessage, 64),
 		readySignal: make(chan bool),
 		assembler:   common.NewMessageAssembler(),
-		broadcast:   broadcast,
+		server:      s,
 	}
 }

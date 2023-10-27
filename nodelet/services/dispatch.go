@@ -24,7 +24,7 @@ const (
 	StatusSwitching     DispatchStatus = "switching"
 )
 
-func NewDispatch(address string, handler *LoopHandler) *Dispatch {
+func NewDispatch(address string, targetNS *string) *Dispatch {
 	return &Dispatch{
 		log:        zap.L().With(zap.String("facility", "dispatch")),
 		address:    address,
@@ -46,7 +46,13 @@ func NewDispatch(address string, handler *LoopHandler) *Dispatch {
 		suspended:  false,
 		writerLock: &sync.Mutex{},
 		readLock:   &sync.Mutex{},
+		targetNS:   targetNS,
 	}
+}
+
+type Dispatcher interface {
+	notifyBroken(*dispatchConnection)
+	targetNamespace() []byte
 }
 
 type Dispatch struct {
@@ -70,6 +76,7 @@ type Dispatch struct {
 	suspended  bool
 	writerLock *sync.Mutex
 	readLock   *sync.Mutex
+	targetNS   *string
 }
 
 type DispatchError struct {
@@ -80,6 +87,13 @@ type DispatchError struct {
 func (d *Dispatch) Status() DispatchStatus    { return d.status.Load().(DispatchStatus) }
 func (d *Dispatch) ServerHost() *string       { return d.serverHost.Load().(*string) }
 func (d *Dispatch) LastError() *DispatchError { return d.lastError.Load().(*DispatchError) }
+
+func (d *Dispatch) targetNamespace() []byte {
+	if d.targetNS == nil {
+		return nil
+	}
+	return []byte(*d.targetNS)
+}
 
 func (d *Dispatch) setStatus(val DispatchStatus) {
 	d.status.Store(val)

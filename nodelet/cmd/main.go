@@ -25,6 +25,11 @@ func main() {
 				EnvVars: []string{"UDPFW_DISPATCH_ADDRESS", "NODELET_DISPATCH_ADDRESS"},
 				Value:   "udpfw-dispatch.svc.cluster.local",
 			},
+			&cli.StringFlag{
+				Name:    "namespace",
+				Usage:   "Namespace to listen to",
+				EnvVars: []string{"UDPFW_NODELET_NAMESPACE", "NODELET_NAMESPACE"},
+			},
 			&cli.BoolFlag{
 				Name:    "debug",
 				Usage:   "Enables debug logging",
@@ -62,7 +67,12 @@ func main() {
 
 			addrs := ctx.String("dispatch-address")
 			logger.Info("Initialize Dispatch connector", zap.String("address", addrs))
-			dispatch := services.NewDispatch(addrs, loopHandler)
+			var ns *string = nil
+			if ctx.IsSet("namespace") {
+				nv := ctx.String("namespace")
+				ns = &nv
+			}
+			dispatch := services.NewDispatch(addrs, ns)
 
 			emitterDone := make(chan bool)
 			go func() {

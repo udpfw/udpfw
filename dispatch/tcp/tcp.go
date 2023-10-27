@@ -28,36 +28,34 @@ func New(ctx *config.Context, pubSub pubsub.PubSub) (*Server, error) {
 	}
 
 	return &Server{
-		hostname:    hostname,
-		log:         log,
-		listener:    listener,
-		clients:     map[string]*Client{},
-		clientsLock: &sync.Mutex{},
-		idGen:       nuid.New(),
-		pubSub:      pubSub,
-		wg:          &sync.WaitGroup{},
+		hostname:   hostname,
+		log:        log,
+		listener:   listener,
+		clients:    &ClientMap{},
+		namespaces: &NSMap{},
+		idGen:      nuid.New(),
+		pubSub:     pubSub,
+		wg:         &sync.WaitGroup{},
 	}, nil
 }
 
 type Server struct {
-	listener    net.Listener
-	clients     map[string]*Client
-	clientsLock *sync.Mutex
-	log         *zap.Logger
-	idGen       *nuid.NUID
-	pubSub      pubsub.PubSub
-	wg          *sync.WaitGroup
-	hostname    string
+	listener   net.Listener
+	clients    *ClientMap
+	log        *zap.Logger
+	idGen      *nuid.NUID
+	pubSub     pubsub.PubSub
+	wg         *sync.WaitGroup
+	hostname   string
+	namespaces *NSMap
 }
 
 func (s *Server) CountConnected() int {
-	s.clientsLock.Lock()
-	defer s.clientsLock.Unlock()
-	return len(s.clients)
+	return s.clients.Len()
 }
 
-func (s *Server) emitBroadcast(id string, data common.ClientMessage) {
-	pkt := pubsub.MakePacket(id, data)
+func (s *Server) emitBroadcast(id string, ns string, data common.ClientMessage) {
+	pkt := pubsub.MakePacket(id, ns, data)
 	if err := s.pubSub.Broadcast(pkt); err != nil {
 		s.log.Error("CRITICAL: Failed emitting broadcast",
 			zap.String("client", id),
@@ -67,23 +65,17 @@ func (s *Server) emitBroadcast(id string, data common.ClientMessage) {
 }
 
 func (s *Server) unregisterClient(id string) {
-	s.clientsLock.Lock()
-	defer s.clientsLock.Unlock()
-
-	delete(s.clients, id)
+	s.clients.Delete(id)
 	s.wg.Done()
 	s.log.Debug("Deregistered client", zap.String("id", id))
 }
 
 func (s *Server) dispatchPubSubMessage(msg pubsub.PacketData) {
-	src, data := msg.Deconstruct()
-	s.clientsLock.Lock()
-	defer s.clientsLock.Unlock()
-	for id, cli := range s.clients {
-		if id == src {
-			continue
+	src, ns, data := msg.Deconstruct()
+	for _, cli := range s.namespaces.Get(ns) {
+		if cli.id != src {
+			cli.Write(data)
 		}
-		cli.Write(data)
 	}
 }
 
@@ -98,6 +90,7 @@ func (s *Server) Run() error {
 			s.dispatchPubSubMessage(msg)
 		}
 	}()
+
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
@@ -107,21 +100,31 @@ func (s *Server) Run() error {
 			s.log.Error("Failed accepting client", zap.Error(err))
 			return err
 		}
+
 		id := s.idGen.Next()
-		broadcastFn := func(msg common.ClientMessage) {
-			s.emitBroadcast(id, msg)
-		}
-		doneFn := func() {
-			s.unregisterClient(id)
-		}
-		c := NewClient(s.hostname, id, conn, doneFn, broadcastFn)
-		s.clientsLock.Lock()
-		s.clients[id] = c
+		c := NewClient(s, id, conn)
+		s.clients.RegisterClient(id, c)
 		s.wg.Add(1)
-		s.clientsLock.Unlock()
-		c.log.Debug("Registered new client", zap.String("id", id), zap.String("addr", conn.RemoteAddr().String()))
+		c.log.Debug("Registered new client",
+			zap.String("id", id),
+			zap.String("addr", conn.RemoteAddr().String()))
 		go c.service()
 	}
+}
+
+func (s *Server) RequestBroadcast(client *Client, msg common.ClientMessage) {
+	s.emitBroadcast(client.id, *client.ns, msg)
+}
+
+func (s *Server) SignalDone(client *Client) {
+	s.unregisterClient(client.id)
+	if client.ns != nil {
+		s.namespaces.Delete(*client.ns, client)
+	}
+}
+
+func (s *Server) AssocNamespace(client *Client, ns string) {
+	s.namespaces.Add(ns, client)
 }
 
 func (s *Server) Shutdown() {
@@ -131,12 +134,11 @@ func (s *Server) Shutdown() {
 	}
 
 	s.log.Info("Dispatching shutdown packet to clients")
-	s.clientsLock.Lock()
-	for id, c := range s.clients {
+	s.clients.Range(func(id string, c *Client) bool {
 		c.Write(common.NewClientMessage(common.ClientMessageBye, nil))
 		s.log.Debug("Dispatched shutdown", zap.String("client", id))
-	}
-	s.clientsLock.Unlock()
+		return true
+	})
 
 	s.log.Info("Waiting for clients to drain...")
 	tick := time.NewTicker(3 * time.Second)

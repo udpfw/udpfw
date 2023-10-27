@@ -12,12 +12,18 @@ import (
 
 var ConnectionBrokenErr = fmt.Errorf("connection is broken. Try again")
 
+type dummyDispatcher struct{}
+
+func (d *dummyDispatcher) notifyBroken(connection *dispatchConnection) {}
+func (d *dummyDispatcher) targetNamespace() []byte                     { return nil }
+
+var dummyDispatch = &dummyDispatcher{}
+
 func newDispatchConnection(parent *Dispatch, conn net.Conn) (*dispatchConnection, error) {
 	running := &atomic.Bool{}
 	running.Store(true)
 	parentRef := &atomic.Value{}
 	parentRef.Store(parent)
-
 	ackLock := &sync.Mutex{}
 	ackCond := sync.NewCond(ackLock)
 
@@ -121,7 +127,9 @@ func (d *dispatchConnection) handshake() error {
 		okChan <- true
 	}()
 
-	if err := d.Write(common.HelloMessage); err != nil {
+	handshake := common.NewClientMessage(common.ClientMessageHello,
+		d.parent.Load().(Dispatcher).targetNamespace())
+	if err := d.Write(handshake); err != nil {
 		return err
 	}
 
@@ -155,7 +163,7 @@ func (d *dispatchConnection) Read() common.ClientMessage { return <-d.ch }
 func (d *dispatchConnection) Shutdown() error {
 	d.running.Swap(false)
 	err := d.conn.Close()
-	d.parent.Swap(nil)
+	d.parent.Swap(dummyDispatch)
 	close(d.done)
 	return err
 }
@@ -164,6 +172,6 @@ func (d *dispatchConnection) wait() { <-d.done }
 
 func (d *dispatchConnection) notifyBroken() {
 	if parent := d.parent.Load(); parent != nil {
-		parent.(*Dispatch).notifyBroken(d)
+		parent.(Dispatcher).notifyBroken(d)
 	}
 }
