@@ -39,9 +39,14 @@ func main() {
 
 			logger := zap.L()
 
+			logger.Info("Initialize loop handler")
+			loopHandler := services.NewLoopHandler()
+			loopHandler.Start()
+			logger.Info("Loop handler initialization complete")
+
 			iface := ctx.String("iface")
 			logger.Info("Initialize packet handler...", zap.String("iface", iface))
-			handler, err := services.NewPacketHandler(iface)
+			handler, err := services.NewPacketHandler(iface, loopHandler)
 			if err != nil {
 				logger.Fatal("Failed initializing packet handler", zap.Error(err))
 			}
@@ -57,7 +62,7 @@ func main() {
 
 			addrs := ctx.String("dispatch-address")
 			logger.Info("Initialize Dispatch connector", zap.String("address", addrs))
-			dispatch := services.NewDispatch(addrs)
+			dispatch := services.NewDispatch(addrs, loopHandler)
 
 			emitterDone := make(chan bool)
 			go func() {

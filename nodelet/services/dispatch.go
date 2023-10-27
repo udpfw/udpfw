@@ -24,7 +24,7 @@ const (
 	StatusSwitching     DispatchStatus = "switching"
 )
 
-func NewDispatch(address string) *Dispatch {
+func NewDispatch(address string, handler *LoopHandler) *Dispatch {
 	return &Dispatch{
 		log:        zap.L().With(zap.String("facility", "dispatch")),
 		address:    address,
@@ -80,10 +80,12 @@ type DispatchError struct {
 func (d *Dispatch) Status() DispatchStatus    { return d.status.Load().(DispatchStatus) }
 func (d *Dispatch) ServerHost() *string       { return d.serverHost.Load().(*string) }
 func (d *Dispatch) LastError() *DispatchError { return d.lastError.Load().(*DispatchError) }
+
 func (d *Dispatch) setStatus(val DispatchStatus) {
 	d.status.Store(val)
 	d.log.Debug("Status transitioned", zap.String("status", string(val)))
 }
+
 func (d *Dispatch) setError(err error) {
 	d.lastError.Store(&DispatchError{
 		Error: err,
@@ -106,7 +108,7 @@ func (d *Dispatch) makeConnection() {
 			if err == nil {
 				d.conn = disp
 				d.serverHost.Store(&d.conn.ServerHost)
-				d.log.Debug("Now connected", zap.String("host", d.conn.ServerHost))
+				d.log.Info("Now connected", zap.String("host", d.conn.ServerHost))
 				if d.suspended {
 					d.resume()
 				}
@@ -204,7 +206,6 @@ func (d *Dispatch) serviceWrites() {
 				// Connection is broken, try again after resynchronize
 				continue
 			}
-			d.log.Debug("Wrote packet to dispatcher", zap.ByteString("data", toWrite))
 			break
 		}
 	}

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"fmt"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
@@ -11,13 +12,14 @@ import (
 	"syscall"
 )
 
-func NewPacketHandler(iface string) (*PacketHandler, error) {
+func NewPacketHandler(iface string, loopHandler *LoopHandler) (*PacketHandler, error) {
 	packetChan := make(chan []byte, 4096)
 	reader, err := ip.NewReader(iface)
 	if err != nil {
 		return nil, err
 	}
 	reader.Recv = func(packet gopacket.Packet) {
+		loopHandler.RegisterPacket(packet.Data()[len(packet.LinkLayer().LayerContents()):])
 		packetChan <- packet.Data()
 	}
 
@@ -32,13 +34,14 @@ func NewPacketHandler(iface string) (*PacketHandler, error) {
 	}
 
 	return &PacketHandler{
-		log:        zap.L().With(zap.String("facility", "packet_handler")),
-		reader:     reader,
-		packetChan: packetChan,
-		writeLock:  &sync.Mutex{},
-		sock4Fd:    fd4,
-		sock6Fd:    fd6,
-		iface:      iface,
+		log:         zap.L().With(zap.String("facility", "packet_handler")),
+		reader:      reader,
+		packetChan:  packetChan,
+		writeLock:   &sync.Mutex{},
+		sock4Fd:     fd4,
+		sock6Fd:     fd6,
+		iface:       iface,
+		loopHandler: loopHandler,
 	}, nil
 }
 
@@ -51,6 +54,7 @@ type PacketHandler struct {
 	sock6Fd     int
 	log         *zap.Logger
 	iface       string
+	loopHandler *LoopHandler
 }
 
 func (c *PacketHandler) Start() error {
@@ -67,20 +71,36 @@ func (c *PacketHandler) NextPacket() []byte { return <-c.packetChan }
 func (c *PacketHandler) Shutdown() { c.reader.Shutdown() }
 
 func (c *PacketHandler) Inject(pkt []byte) error {
-	target, addr, data := c.RoutePacket(pkt)
+	target, addr, data := c.routePacket(pkt)
+	c.log.Debug("Routed package",
+		zap.Any("target_fd", target),
+		zap.Any("addr", addr),
+		zap.ByteString("data", data))
+
+	if c.loopHandler.ShouldDropPacket(data) {
+		c.log.Debug("Dropped packet blocked by Loop Handler")
+		return nil
+	}
+
 	if err := syscall.Sendto(target, data, 0, addr); err != nil {
+		errno := "<no errno>"
+		var e syscall.Errno
+		if errors.As(err, &e) {
+			errno = fmt.Sprintf("%d", int(e))
+		}
 		c.log.Error("Failed pushing packet to raw socket",
+			zap.String("errno", errno),
 			zap.ByteString("data", data),
 			zap.Error(err))
+
 		return err
 	}
 
 	return nil
 }
 
-func (c *PacketHandler) RoutePacket(rawPkt []byte) (int, syscall.Sockaddr, []byte) {
+func (c *PacketHandler) routePacket(rawPkt []byte) (int, syscall.Sockaddr, []byte) {
 	pkt := gopacket.NewPacket(rawPkt, layers.LayerTypeEthernet, gopacket.Default)
-	c.log.Debug("Routing packet", zap.String("dump", pkt.Dump()))
 	udpLayer := pkt.Layer(layers.LayerTypeUDP)
 	if udpLayer == nil {
 		c.log.Info("Dropped packet with no UDP layer", zap.ByteString("packet", rawPkt))
@@ -123,7 +143,7 @@ func (c *PacketHandler) RoutePacket(rawPkt []byte) (int, syscall.Sockaddr, []byt
 
 func extractAddress(pkt gopacket.Packet, udp *layers.UDP) (syscall.Sockaddr, error) {
 	if ipLayer := pkt.Layer(layers.LayerTypeIPv4); ipLayer != nil {
-		ipLayer, _ := ipLayer.(*layers.IPv4)
+		ipLayer := ipLayer.(*layers.IPv4)
 		ipLayer.TTL = 255
 		return &syscall.SockaddrInet4{
 			Port: int(udp.DstPort),
@@ -135,7 +155,7 @@ func extractAddress(pkt gopacket.Packet, udp *layers.UDP) (syscall.Sockaddr, err
 		ipLayer, _ := ipLayer.(*layers.IPv6)
 		ipLayer.HopLimit = 128
 		return &syscall.SockaddrInet6{
-			Port:   int(udp.DstPort),
+			Port:   0,
 			Addr:   [16]byte(ipLayer.DstIP.To16()),
 			ZoneId: 0,
 		}, nil

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/udpfw/common"
-	"go.uber.org/zap"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -147,7 +146,6 @@ func (d *dispatchConnection) Write(pkt common.ClientMessage) error {
 		}
 		written += n
 	}
-	zap.L().With(zap.String("facility", "TCP")).Debug("Wrote to dispatcher", zap.Int("size", len(pkt)))
 
 	return nil
 }
