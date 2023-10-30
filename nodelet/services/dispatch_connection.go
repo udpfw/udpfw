@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 var ConnectionBrokenErr = fmt.Errorf("connection is broken. Try again")
@@ -17,20 +18,17 @@ type dummyDispatcher struct{}
 func (d *dummyDispatcher) notifyBroken(connection *dispatchConnection) {}
 func (d *dummyDispatcher) targetNamespace() []byte                     { return nil }
 
-var dummyDispatch = &dummyDispatcher{}
+var dummyDispatch Dispatcher = &dummyDispatcher{}
 
 func newDispatchConnection(parent *Dispatch, conn net.Conn) (*dispatchConnection, error) {
 	running := &atomic.Bool{}
 	running.Store(true)
-	parentRef := &atomic.Value{}
-	parentRef.Store(parent)
 	ackLock := &sync.Mutex{}
 	ackCond := sync.NewCond(ackLock)
 
 	d := &dispatchConnection{
-		conn:   conn,
-		asm:    common.NewMessageAssembler(),
-		parent: parentRef,
+		conn: conn,
+		asm:  common.NewMessageAssembler(),
 
 		running:       running,
 		disconnecting: &atomic.Bool{},
@@ -43,6 +41,8 @@ func newDispatchConnection(parent *Dispatch, conn net.Conn) (*dispatchConnection
 		done: make(chan bool),
 	}
 
+	d.storeParent(parent)
+
 	if err := d.handshake(); err != nil {
 		if closeErr := conn.Close(); closeErr != nil {
 			// TODO: LOG
@@ -54,9 +54,9 @@ func newDispatchConnection(parent *Dispatch, conn net.Conn) (*dispatchConnection
 }
 
 type dispatchConnection struct {
-	conn   net.Conn
-	asm    *common.MessageAssembler
-	parent *atomic.Value
+	conn      net.Conn
+	asm       *common.MessageAssembler
+	parentPtr unsafe.Pointer
 
 	running       *atomic.Bool
 	disconnecting *atomic.Bool
@@ -74,6 +74,14 @@ type dispatchConnection struct {
 
 func (d *dispatchConnection) shouldRelayConnectionError() bool {
 	return !d.disconnecting.Load() && !d.broken.Load()
+}
+
+func (d *dispatchConnection) storeParent(parent Dispatcher) {
+	atomic.StorePointer(&d.parentPtr, unsafe.Pointer(&parent))
+}
+
+func (d *dispatchConnection) parent() Dispatcher {
+	return *((*Dispatcher)(atomic.LoadPointer(&d.parentPtr)))
 }
 
 func (d *dispatchConnection) serviceReads() {
@@ -128,7 +136,7 @@ func (d *dispatchConnection) handshake() error {
 	}()
 
 	handshake := common.NewClientMessage(common.ClientMessageHello,
-		d.parent.Load().(Dispatcher).targetNamespace())
+		d.parent().targetNamespace())
 	if err := d.Write(handshake); err != nil {
 		return err
 	}
@@ -163,7 +171,7 @@ func (d *dispatchConnection) Read() common.ClientMessage { return <-d.ch }
 func (d *dispatchConnection) Shutdown() error {
 	d.running.Swap(false)
 	err := d.conn.Close()
-	d.parent.Swap(dummyDispatch)
+	d.storeParent(dummyDispatch)
 	close(d.done)
 	return err
 }
@@ -171,7 +179,7 @@ func (d *dispatchConnection) Shutdown() error {
 func (d *dispatchConnection) wait() { <-d.done }
 
 func (d *dispatchConnection) notifyBroken() {
-	if parent := d.parent.Load(); parent != nil {
+	if parent := d.parent(); parent != nil {
 		parent.(Dispatcher).notifyBroken(d)
 	}
 }
