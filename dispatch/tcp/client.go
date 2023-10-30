@@ -131,7 +131,7 @@ func (c *Client) handleMessage(msg common.ClientMessage) {
 		var ns string
 		if msg.PayloadSize() > 0 {
 			ns = string(msg.Payload())
-			c.log.Debug("Registered interest in namespace", zap.Stringp("namespace", c.ns))
+			c.log.Debug("Registered interest in namespace", zap.String("namespace", ns))
 		} else {
 			ns = "$$global"
 			c.log.Debug("Client is running on global namespace")
