@@ -138,6 +138,7 @@ func (c *Client) handleMessage(msg common.ClientMessage) {
 		}
 		c.ns = &ns
 		c.wantsHello = false
+		c.server.AssocNamespace(c, ns)
 		c.Write(common.NewClientMessage(common.ClientMessageAck, []byte(c.server.hostname)))
 		c.ready()
 
