@@ -3,6 +3,7 @@ package common
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 )
 
 /*
@@ -68,6 +69,16 @@ func (c ClientMessage) Type() ClientMessageType {
 	}
 }
 
+var kindToString = map[ClientMessageType]string{
+	ClientMessageInvalid: "INVALID",
+	ClientMessageHello:   "HELLO",
+	ClientMessageAck:     "ACK",
+	ClientMessagePing:    "PING",
+	ClientMessagePong:    "PONG",
+	ClientMessagePkt:     "PKT",
+	ClientMessageBye:     "BYE",
+}
+
 func (c ClientMessage) PayloadSize() int {
 	offset, ok := sizeOffset[c.Type()]
 	if !ok || offset == 0 {
@@ -75,6 +86,11 @@ func (c ClientMessage) PayloadSize() int {
 	}
 
 	return int(binary.BigEndian.Uint16(c[offset : offset+2]))
+}
+
+func (c ClientMessage) String() string {
+	return fmt.Sprintf("ClientMessage{Type: %s, Size: %d, Payload: %#v}",
+		kindToString[c.Type()], c.PayloadSize(), c.Payload())
 }
 
 func (c ClientMessage) Payload() []byte {
