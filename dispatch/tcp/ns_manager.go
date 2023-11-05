@@ -1,6 +1,8 @@
 package tcp
 
-import "sync"
+import (
+	"sync"
+)
 
 type NSMap struct {
 	mu   sync.RWMutex

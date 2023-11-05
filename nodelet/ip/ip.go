@@ -25,7 +25,7 @@ func NewReader(iface string) (*PacketReader, error) {
 
 	return &PacketReader{
 		handle: handle,
-		ch:     make(chan []byte, 100),
+		ch:     make(chan []byte, 512),
 		iface:  iface,
 	}, nil
 }
@@ -39,19 +39,15 @@ func (p *PacketReader) Shutdown() {
 func (p *PacketReader) Run() error {
 	go p.read()
 
-	var err error
-	var data []byte
-
-	for err == nil {
-		data, _, err = p.handle.ReadPacketData()
+	defer close(p.ch)
+	for {
+		data, _, err := p.handle.ReadPacketData()
 		if err != nil {
-			break
+			return err
 		}
 
 		p.ch <- data
 	}
-	close(p.ch)
-	return err
 }
 
 func (p *PacketReader) read() {
