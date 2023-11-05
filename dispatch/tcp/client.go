@@ -83,9 +83,8 @@ func (c *Client) serviceWrites(done func()) {
 func (c *Client) serviceReads(done func()) {
 	defer done()
 	buffer := make([]byte, 128)
-	bufferCur := 0
 	for {
-		n, err := c.conn.Read(buffer[bufferCur:])
+		n, err := c.conn.Read(buffer)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if !c.stopped.Load() {
@@ -104,7 +103,7 @@ func (c *Client) serviceReads(done func()) {
 			if msg != nil {
 				c.log.Debug("Got message from client")
 				c.handleMessage(msg)
-				break
+				continue
 			}
 
 			if c.wantsHello && c.assembler.BufferSize() > 2 && c.assembler.ExpectedType() != common.ClientMessageHello {
@@ -112,9 +111,7 @@ func (c *Client) serviceReads(done func()) {
 				c.drop()
 				return
 			}
-
 		}
-		bufferCur = 0
 	}
 }
 
