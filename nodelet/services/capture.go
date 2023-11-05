@@ -18,8 +18,15 @@ func NewPacketHandler(iface string, loopHandler *LoopHandler) (*PacketHandler, e
 	if err != nil {
 		return nil, err
 	}
+
 	reader.Recv = func(packet gopacket.Packet) {
-		loopHandler.RegisterPacket(packet.Data()[len(packet.LinkLayer().LayerContents()):])
+		network := ""
+		if packet.Layer(layers.LayerTypeIPv4) != nil {
+			network = "ipv4"
+		} else {
+			network = "ipv6"
+		}
+		loopHandler.RegisterPacket(network, packet.Data()[len(packet.LinkLayer().LayerContents()):])
 		packetChan <- packet.Data()
 	}
 
@@ -71,13 +78,14 @@ func (c *PacketHandler) NextPacket() []byte { return <-c.packetChan }
 func (c *PacketHandler) Shutdown() { c.reader.Shutdown() }
 
 func (c *PacketHandler) Inject(pkt []byte) error {
-	target, addr, data := c.routePacket(pkt)
+	network, target, addr, data := c.routePacket(pkt)
 	c.log.Debug("Routed package",
 		zap.Any("target_fd", target),
+		zap.String("network", network),
 		zap.Any("addr", addr),
 		zap.ByteString("data", data))
 
-	if c.loopHandler.ShouldDropPacket(data) {
+	if c.loopHandler.ShouldDropPacket(network, data) {
 		c.log.Debug("Dropped packet blocked by Loop Handler")
 		return nil
 	}
@@ -99,19 +107,19 @@ func (c *PacketHandler) Inject(pkt []byte) error {
 	return nil
 }
 
-func (c *PacketHandler) routePacket(rawPkt []byte) (int, syscall.Sockaddr, []byte) {
+func (c *PacketHandler) routePacket(rawPkt []byte) (string, int, syscall.Sockaddr, []byte) {
 	pkt := gopacket.NewPacket(rawPkt, layers.LayerTypeEthernet, gopacket.Default)
 	udpLayer := pkt.Layer(layers.LayerTypeUDP)
 	if udpLayer == nil {
 		c.log.Info("Dropped packet with no UDP layer", zap.ByteString("packet", rawPkt))
-		return -1, nil, nil
+		return "", -1, nil, nil
 	}
 
 	udp := udpLayer.(*layers.UDP)
 	err := udp.SetNetworkLayerForChecksum(pkt.NetworkLayer())
 	if err != nil {
 		c.log.Error("Failed setting network layer for checksum", zap.Error(err))
-		return -1, nil, nil
+		return "", -1, nil, nil
 	}
 
 	options := gopacket.SerializeOptions{
@@ -121,24 +129,27 @@ func (c *PacketHandler) routePacket(rawPkt []byte) (int, syscall.Sockaddr, []byt
 	buf := gopacket.NewSerializeBuffer()
 	if err = gopacket.SerializePacket(buf, options, pkt); err != nil {
 		c.log.Error("Failed serializing packet", zap.Error(err))
-		return -1, nil, nil
+		return "", -1, nil, nil
 	}
 
 	addr, err := extractAddress(pkt, udp)
 	if err != nil {
 		c.log.Error("Failed extracting address", zap.Error(err))
-		return -1, nil, nil
+		return "", -1, nil, nil
 	}
 
 	var target int
+	var network string
 	switch addr.(type) {
 	case *syscall.SockaddrInet4:
+		network = "ipv4"
 		target = c.sock4Fd
 	default:
+		network = "ipv6"
 		target = c.sock6Fd
 	}
 
-	return target, addr, buf.Bytes()[len(pkt.LinkLayer().LayerContents()):]
+	return network, target, addr, buf.Bytes()[len(pkt.LinkLayer().LayerContents()):]
 }
 
 func extractAddress(pkt gopacket.Packet, udp *layers.UDP) (syscall.Sockaddr, error) {

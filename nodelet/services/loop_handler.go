@@ -49,21 +49,21 @@ func (l *LoopHandler) Start() {
 	}()
 }
 
-func (l *LoopHandler) hashPacket(pkt []byte) string {
+func (l *LoopHandler) hashPacket(network string, pkt []byte) string {
 	defer l.hashFn.Reset()
 	_, _ = l.hashFn.Write(pkt)
-	return string(l.hashFn.Sum(nil))
+	return network + "-" + string(l.hashFn.Sum(nil))
 }
 
-func (l *LoopHandler) RegisterPacket(pkt []byte) {
-	digest := l.hashPacket(pkt)
+func (l *LoopHandler) RegisterPacket(network string, pkt []byte) {
+	digest := l.hashPacket(network, pkt)
 	l.messageMu.Lock()
 	defer l.messageMu.Unlock()
 	l.messages[digest] = time.Now()
 }
 
-func (l *LoopHandler) ShouldDropPacket(pkt []byte) bool {
-	digest := l.hashPacket(pkt)
+func (l *LoopHandler) ShouldDropPacket(network string, pkt []byte) bool {
+	digest := l.hashPacket(network, pkt)
 	l.messageMu.Lock()
 	defer l.messageMu.Unlock()
 
